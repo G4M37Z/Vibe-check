@@ -1,18 +1,23 @@
 
 import React, { useState, useEffect, useMemo } from 'react';
-import { AppView, Message, User, ChatMessage } from './types';
-import { ICONS } from './constants';
-import { analyzeMessageVibe, generateWittyReplies } from './services/geminiService';
+import { AppView, Message, User, ChatMessage } from './types.ts';
+import { ICONS } from './constants.tsx';
+import { analyzeMessageVibe, generateWittyReplies } from './services/geminiService.ts';
 
 const STORAGE_KEY_USER = 'vibecheck_user';
 const STORAGE_KEY_MESSAGES = 'vibecheck_messages';
-const STORAGE_KEY_SENT_TRACKER = 'vibecheck_sent_ids'; // Track IDs sent from this device
+const STORAGE_KEY_SENT_TRACKER = 'vibecheck_sent_ids';
 
 const App: React.FC = () => {
-  // --- State ---
+  // --- State with Error Boundaries for LocalStorage ---
   const [currentUser, setCurrentUser] = useState<User | null>(() => {
-    const saved = localStorage.getItem(STORAGE_KEY_USER);
-    return saved ? JSON.parse(saved) : null;
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY_USER);
+      return saved ? JSON.parse(saved) : null;
+    } catch (e) {
+      console.error("Failed to parse user from storage", e);
+      return null;
+    }
   });
 
   const [messages, setMessages] = useState<Message[]>([]);
@@ -38,27 +43,38 @@ const App: React.FC = () => {
   // --- Syncing ---
   const syncMessages = (user: User | null) => {
     if (!user) return;
-    const saved = localStorage.getItem(STORAGE_KEY_MESSAGES);
-    if (saved) {
-      const all: Message[] = JSON.parse(saved);
-      const filtered = all.filter(m => m.recipientId.toLowerCase() === user.username.toLowerCase());
-      setMessages(filtered);
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY_MESSAGES);
+      if (saved) {
+        const all: Message[] = JSON.parse(saved);
+        const filtered = all.filter(m => m.recipientId.toLowerCase() === user.username.toLowerCase());
+        setMessages(filtered);
+      }
+    } catch (e) {
+      console.error("Failed to sync messages", e);
     }
   };
 
   const syncMySentMessages = (recipient: string) => {
-    const sentIds: string[] = JSON.parse(localStorage.getItem(STORAGE_KEY_SENT_TRACKER) || '[]');
-    const allMessages: Message[] = JSON.parse(localStorage.getItem(STORAGE_KEY_MESSAGES) || '[]');
-    const filtered = allMessages.filter(m => sentIds.includes(m.id) && m.recipientId.toLowerCase() === recipient.toLowerCase());
-    setMySentMessages(filtered);
+    try {
+      const sentIds: string[] = JSON.parse(localStorage.getItem(STORAGE_KEY_SENT_TRACKER) || '[]');
+      const allMessages: Message[] = JSON.parse(localStorage.getItem(STORAGE_KEY_MESSAGES) || '[]');
+      const filtered = allMessages.filter(m => sentIds.includes(m.id) && m.recipientId.toLowerCase() === recipient.toLowerCase());
+      setMySentMessages(filtered);
+    } catch (e) {
+      console.error("Failed to sync sent messages", e);
+    }
   };
 
   // --- Routing ---
   useEffect(() => {
     const handleHash = () => {
       const hash = window.location.hash || '#/';
-      const savedUser = localStorage.getItem(STORAGE_KEY_USER);
-      const user = savedUser ? JSON.parse(savedUser) : null;
+      let user = null;
+      try {
+        const savedUser = localStorage.getItem(STORAGE_KEY_USER);
+        user = savedUser ? JSON.parse(savedUser) : null;
+      } catch (e) {}
 
       if (hash.startsWith('#/u/')) {
         const u = hash.replace('#/u/', '').toLowerCase();
@@ -109,32 +125,36 @@ const App: React.FC = () => {
     if (!newMessage.trim() || !recipientUsername) return;
     setIsSending(true);
     
-    const all = JSON.parse(localStorage.getItem(STORAGE_KEY_MESSAGES) || '[]');
-    const msgId = Date.now().toString();
-    const msg: Message = {
-      id: msgId,
-      recipientId: recipientUsername.toLowerCase(),
-      content: newMessage.trim(),
-      timestamp: Date.now(),
-      read: false,
-      replies: []
-    };
-    
-    all.push(msg);
-    localStorage.setItem(STORAGE_KEY_MESSAGES, JSON.stringify(all));
-    
-    // Track that this device sent this message
-    const sentIds = JSON.parse(localStorage.getItem(STORAGE_KEY_SENT_TRACKER) || '[]');
-    sentIds.push(msgId);
-    localStorage.setItem(STORAGE_KEY_SENT_TRACKER, JSON.stringify(sentIds));
-    
-    setTimeout(() => {
+    try {
+      const all = JSON.parse(localStorage.getItem(STORAGE_KEY_MESSAGES) || '[]');
+      const msgId = Date.now().toString();
+      const msg: Message = {
+        id: msgId,
+        recipientId: recipientUsername.toLowerCase(),
+        content: newMessage.trim(),
+        timestamp: Date.now(),
+        read: false,
+        replies: []
+      };
+      
+      all.push(msg);
+      localStorage.setItem(STORAGE_KEY_MESSAGES, JSON.stringify(all));
+      
+      const sentIds = JSON.parse(localStorage.getItem(STORAGE_KEY_SENT_TRACKER) || '[]');
+      sentIds.push(msgId);
+      localStorage.setItem(STORAGE_KEY_SENT_TRACKER, JSON.stringify(sentIds));
+      
+      setTimeout(() => {
+        setIsSending(false);
+        setNewMessage('');
+        setJustSent(true);
+        syncMySentMessages(recipientUsername);
+        setTimeout(() => setJustSent(false), 3000);
+      }, 800);
+    } catch (e) {
+      console.error("Failed to send message", e);
       setIsSending(false);
-      setNewMessage('');
-      setJustSent(true);
-      syncMySentMessages(recipientUsername);
-      setTimeout(() => setJustSent(false), 3000);
-    }, 800);
+    }
   };
 
   const handleSendChatReply = (role: 'owner' | 'anonymous') => {
@@ -146,25 +166,27 @@ const App: React.FC = () => {
       timestamp: Date.now()
     };
 
-    const all = JSON.parse(localStorage.getItem(STORAGE_KEY_MESSAGES) || '[]');
-    const updatedAll = all.map((m: Message) => {
-      if (m.id === activeMessage.id) {
-        return { ...m, replies: [...(m.replies || []), reply] };
-      }
-      return m;
-    });
+    try {
+      const all = JSON.parse(localStorage.getItem(STORAGE_KEY_MESSAGES) || '[]');
+      const updatedAll = all.map((m: Message) => {
+        if (m.id === activeMessage.id) {
+          return { ...m, replies: [...(m.replies || []), reply] };
+        }
+        return m;
+      });
 
-    localStorage.setItem(STORAGE_KEY_MESSAGES, JSON.stringify(updatedAll));
-    
-    // Update local state
-    const updatedMsg = { ...activeMessage, replies: [...(activeMessage.replies || []), reply] };
-    setActiveMessage(updatedMsg);
-    setMessages(messages.map(m => m.id === activeMessage.id ? updatedMsg : m));
-    setChatReply('');
-    
-    // If we are in sender view, refresh my sent messages
-    if (view === 'SENDER_VIEW') {
-      syncMySentMessages(recipientUsername);
+      localStorage.setItem(STORAGE_KEY_MESSAGES, JSON.stringify(updatedAll));
+      
+      const updatedMsg = { ...activeMessage, replies: [...(activeMessage.replies || []), reply] };
+      setActiveMessage(updatedMsg);
+      setMessages(messages.map(m => m.id === activeMessage.id ? updatedMsg : m));
+      setChatReply('');
+      
+      if (view === 'SENDER_VIEW') {
+        syncMySentMessages(recipientUsername);
+      }
+    } catch (e) {
+      console.error("Failed to send chat reply", e);
     }
   };
 
@@ -175,15 +197,15 @@ const App: React.FC = () => {
     setAiAnalysis(null);
     setAiReplies([]);
 
-    if (!msg.read) {
-      const updatedMessages = messages.map(m => m.id === msg.id ? { ...m, read: true } : m);
-      setMessages(updatedMessages);
-      const all = JSON.parse(localStorage.getItem(STORAGE_KEY_MESSAGES) || '[]');
-      const updatedAll = all.map((m: any) => m.id === msg.id ? { ...m, read: true } : m);
-      localStorage.setItem(STORAGE_KEY_MESSAGES, JSON.stringify(updatedAll));
-    }
-    
     try {
+      if (!msg.read) {
+        const updatedMessages = messages.map(m => m.id === msg.id ? { ...m, read: true } : m);
+        setMessages(updatedMessages);
+        const all = JSON.parse(localStorage.getItem(STORAGE_KEY_MESSAGES) || '[]');
+        const updatedAll = all.map((m: any) => m.id === msg.id ? { ...m, read: true } : m);
+        localStorage.setItem(STORAGE_KEY_MESSAGES, JSON.stringify(updatedAll));
+      }
+      
       const [analysis, replies] = await Promise.all([
         analyzeMessageVibe(msg.content),
         generateWittyReplies(msg.content)
@@ -191,25 +213,29 @@ const App: React.FC = () => {
       setAiAnalysis(analysis);
       setAiReplies(replies);
     } catch (e) {
-      console.error(e);
+      console.error("AI Analysis failed", e);
     } finally {
       setLoadingAi(false);
     }
   };
 
   const deleteMessage = (id: string) => {
-    const updatedMessages = messages.filter(m => m.id !== id);
-    setMessages(updatedMessages);
-    const all = JSON.parse(localStorage.getItem(STORAGE_KEY_MESSAGES) || '[]');
-    const filteredAll = all.filter((m: any) => m.id !== id);
-    localStorage.setItem(STORAGE_KEY_MESSAGES, JSON.stringify(filteredAll));
-    setActiveMessage(null);
+    try {
+      const updatedMessages = messages.filter(m => m.id !== id);
+      setMessages(updatedMessages);
+      const all = JSON.parse(localStorage.getItem(STORAGE_KEY_MESSAGES) || '[]');
+      const filteredAll = all.filter((m: any) => m.id !== id);
+      localStorage.setItem(STORAGE_KEY_MESSAGES, JSON.stringify(filteredAll));
+      setActiveMessage(null);
+    } catch (e) {
+      console.error("Failed to delete message", e);
+    }
   };
 
   // --- Sharing System ---
   const getShareUrl = () => {
     const base = window.location.origin + window.location.pathname;
-    return `${base}#/u/${currentUser?.username}`;
+    return `${base}#/u/${currentUser?.username || 'unknown'}`;
   };
 
   const handleShare = async (platform: string) => {
@@ -264,7 +290,7 @@ const App: React.FC = () => {
         <button 
           onClick={() => {
             const input = document.querySelector('input') as HTMLInputElement;
-            handleRegister(input.value);
+            handleRegister(input.value || '');
           }}
           className="bg-white text-black hover:bg-violet-500 hover:text-white active:scale-90 transition-all p-4 rounded-2xl"
         >
@@ -389,7 +415,6 @@ const App: React.FC = () => {
             {isSending ? 'SENDING...' : 'SEND ANONYMOUSLY'}
           </button>
 
-          {/* Device Persistence: Track your own sent messages here */}
           {mySentMessages.length > 0 && (
             <div className="mt-16 w-full">
               <h3 className="text-[10px] font-black uppercase tracking-[0.4em] text-slate-600 mb-6 text-center">My Sent Vibes</h3>
@@ -424,7 +449,6 @@ const App: React.FC = () => {
     return (
       <div className="flex flex-col h-[400px]">
         <div className="flex-1 overflow-y-auto space-y-4 pr-2 mb-4 custom-scrollbar">
-          {/* Original Message */}
           <div className="flex flex-col items-start max-w-[85%]">
             <div className="bg-white/5 p-4 rounded-[1.5rem] rounded-tl-none border border-white/5">
               <p className="text-sm font-bold italic">"{activeMessage.content}"</p>
@@ -466,7 +490,6 @@ const App: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-[#0f172a] selection:bg-violet-500/50 text-slate-100 overflow-x-hidden">
-      {/* Background FX */}
       <div className="fixed inset-0 pointer-events-none -z-10">
         <div className="absolute top-[-20%] left-[-10%] w-[70%] h-[70%] bg-violet-600/10 blur-[150px] rounded-full"></div>
         <div className="absolute bottom-[-20%] right-[-10%] w-[70%] h-[70%] bg-pink-600/10 blur-[150px] rounded-full"></div>
@@ -506,7 +529,6 @@ const App: React.FC = () => {
 
       <main>{view === 'LANDING' ? renderLanding() : view === 'INBOX' ? renderInbox() : renderSender()}</main>
 
-      {/* --- MODALS --- */}
       {showShareModal && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center p-6">
           <div className="absolute inset-0 bg-black/90 backdrop-blur-xl" onClick={() => setShowShareModal(false)}></div>
@@ -609,7 +631,7 @@ const App: React.FC = () => {
               )}
             </div>
             
-            <button onClick={() => deleteMessage(activeMessage!.id)} className="w-full py-6 text-[10px] font-black uppercase tracking-[0.4em] text-slate-700 hover:text-red-500 transition-colors border-t border-white/5 mt-auto">
+            <button onClick={() => deleteMessage(activeMessage?.id || '')} className="w-full py-6 text-[10px] font-black uppercase tracking-[0.4em] text-slate-700 hover:text-red-500 transition-colors border-t border-white/5 mt-auto">
               Shred Secret
             </button>
           </div>
